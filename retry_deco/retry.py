@@ -23,7 +23,7 @@ DEFAULT_ONEX_OPTS = OnErrOpts(0)
 E = type[BaseException]
 C = Callable[..., Any | Awaitable[Any]]
 N = int | float  # number
-X = Callable[[E], Any]
+X = Callable[[BaseException], Any]
 OnEx = dict[E, C | tuple[C, OnErrOpts]]
 
 
@@ -37,62 +37,84 @@ def attempts_exceeded(f: C, count: int):
     logger.error(f"exceeded {count} attempts for {get_fn_name(f)}")
 
 
-def validate_backoff(
+def is_async_callable(f: Callable[..., Any]) -> bool:
+    while isinstance(f, partial):
+        f = f.func
+    # type(f).__call__ rather than f.__call__, so that a class with an async __call__
+    # isn't mistaken for an async callable (calling the class constructs an instance).
+    return iscoroutinefunction(f) or iscoroutinefunction(type(f).__call__)
+
+
+def ensure_callable(c: Any, is_async: bool, name: str) -> None:
+    if not callable(c):
+        raise TypeError(f"{name} must be callable, got {c!r}")
+    if is_async_callable(c) != is_async:
+        raise TypeError(f"{name} must be {'async' if is_async else 'synchronous'}, got {get_fn_name(c)}")
+
+
+def validate_params(
+    retries: int,
     backoff: N,
     exponential_backoff: bool,
     max_backoff: N,
     jitter: N | tuple[N, N],
+    on_exhaustion: bool | X,
 ):
+    if retries < -1:
+        raise ValueError("retries must be >= -1 (-1 means retry forever).")
+
     if exponential_backoff:
-        assert backoff > 0, "with exponential_backoff backoff must be greater than 0."
-        if max_backoff:
-            assert max_backoff > backoff, "max_backoff must be greater than backoff."
+        if backoff <= 0:
+            raise ValueError("with exponential_backoff backoff must be greater than 0.")
+        if max_backoff and max_backoff <= backoff:
+            raise ValueError("max_backoff must be greater than backoff.")
     else:
-        assert backoff >= 0, "backoff must be >= 0."
-        assert not max_backoff, "max_backoff does not make sense without exponential_backoff."
+        if backoff < 0:
+            raise ValueError("backoff must be >= 0.")
+        if max_backoff:
+            raise ValueError("max_backoff does not make sense without exponential_backoff.")
 
     if jitter:
         if isinstance(jitter, tuple):
-            assert len(jitter) == 2, "jitter, when defined as a tuple, must be a range of length 2"
-            # j = max([abs(x) for x in jitter])
+            if len(jitter) != 2:
+                raise ValueError("jitter, when defined as a tuple, must be a range of length 2.")
             j = max(abs(jitter[0]), abs(jitter[1]))
         else:
             j = abs(jitter)
-        assert j <= backoff, "jitter extreme must be <= backoff."
+        if j > backoff:
+            raise ValueError("jitter extreme must be <= backoff.")
+
+    if not isinstance(on_exhaustion, bool):
+        ensure_callable(on_exhaustion, False, "on_exhaustion")
 
 
 def sanitize_on_exception(onex: None | OnEx | tuple[C, OnErrOpts] | C, is_async: bool) -> OnEx:
-    def assert_callable(c):
-        if is_async:
-            assert iscoroutinefunction(c), "on_exception must be async as decorating function"
-        else:
-            assert not iscoroutinefunction(c), "on_exception must not be async as decorating function"
-            assert callable(c), "c must be callable"
-
-    def assert_iter(i):
-        assert len(i) == 2, "on_exception tuple needs to be of length 2"
-        assert isinstance(i[1], OnErrOpts), "second item in on_exception tuple must be OnErrOpts"
-        assert_callable(i[0])
+    def check_tuple(t):
+        if len(t) != 2:
+            raise ValueError("on_exception tuple must be of length 2: (callable, OnErrOpts).")
+        if not isinstance(t[1], OnErrOpts):
+            raise TypeError("second item in on_exception tuple must be OnErrOpts.")
+        ensure_callable(t[0], is_async, "on_exception callback")
 
     if onex is None:
         return {}
     elif isinstance(onex, dict):
         for c in onex.values():
             if isinstance(c, tuple):
-                assert_iter(c)
+                check_tuple(c)
             else:
-                assert_callable(c)
-        return onex
-    elif callable(onex):
-        assert_callable(onex)
+                ensure_callable(c, is_async, "on_exception callback")
+        return dict(onex)  # copy, so later mutation of caller's dict doesn't affect us
+    elif isinstance(onex, tuple):
+        check_tuple(onex)
         return {Exception: onex}
-    else:  # i.e.  elif isinstance(onex, tuple):
-        assert_iter(onex)
+    else:
+        ensure_callable(onex, is_async, "on_exception callback")
         return {Exception: onex}
 
 
 def handle_delay(
-    exception: E,
+    exception: BaseException,
     count: int,
     retries: int,
     attempts: int,
@@ -256,7 +278,8 @@ def retry(
         backoff:
             time interval between the attempts. default: 0
         exponential_backoff:
-            current_backoff = backoff * 2 ** retries. default: False
+            current_backoff = backoff * 2 ** (n - 1), where n is the number of failed
+            attempts so far, i.e. backoff, 2*backoff, 4*backoff, ... default: False
         on_exhaustion:
             - False if exception should be re-raised when all attempts fail (default).
             - True if raised exception should be returned, not re-raised.
@@ -285,17 +308,12 @@ def retry(
             to be asynchronous. default: None
     """
 
-    validate_backoff(backoff, exponential_backoff, max_backoff, jitter)
-    assert isinstance(on_exhaustion, bool) or not iscoroutinefunction(on_exhaustion), (
-        "on_exhaustion can either be bool or synchronous function"
-    )
+    validate_params(retries, backoff, exponential_backoff, max_backoff, jitter, on_exhaustion)
 
     def decorator(f: C) -> C:
-        if iscoroutinefunction(f):
-            is_async = True
-        else:
-            is_async = False
-            assert callable(f), "function must be callable"
+        if not callable(f):
+            raise TypeError(f"decorated object must be callable, got {f!r}")
+        is_async = is_async_callable(f)
 
         onex: OnEx = sanitize_on_exception(on_exception, is_async)
 
@@ -359,7 +377,7 @@ class BaseRetry(ABC):
         max_backoff: N,
         on_exception: OnEx,
     ):
-        validate_backoff(backoff, exponential_backoff, max_backoff, jitter)
+        validate_params(retries, backoff, exponential_backoff, max_backoff, jitter, on_exhaustion)
 
         self.expected_exception = expected_exception
         self.retries = retries
@@ -416,6 +434,7 @@ class Retry(BaseRetry):
         )
 
     def __call__(self, f: Callable[..., Any], *args, **kwargs) -> Any:
+        ensure_callable(f, False, "function passed to Retry (use RetryAsync for async functions)")
         return retry_logic(
             partial(f, *args, **kwargs),
             self.expected_exception,
@@ -468,7 +487,8 @@ class RetryAsync(BaseRetry):
             sanitize_on_exception(on_exception, True),
         )
 
-    async def __call__(self, f: Callable[..., Awaitable[Any]], *args, **kwargs) -> Awaitable[Any]:
+    async def __call__(self, f: Callable[..., Awaitable[Any]], *args, **kwargs) -> Any:
+        ensure_callable(f, True, "function passed to RetryAsync (use Retry for synchronous functions)")
         return await retry_logic_async(
             partial(f, *args, **kwargs),
             self.expected_exception,

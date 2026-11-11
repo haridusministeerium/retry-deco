@@ -48,7 +48,8 @@ def retry(
         backoff:
             time interval between the attempts. default: 0
         exponential_backoff:
-            current_backoff = backoff * 2 ** retries. default: False
+            current_backoff = backoff * 2 ** (n - 1), where n is the number of failed
+            attempts so far, i.e. backoff, 2*backoff, 4*backoff, ... default: False
         on_exhaustion:
             - False if exception should be re-raised when all attempts fail (default).
             - True if raised exception should be returned, not re-raised.
@@ -103,13 +104,13 @@ def make_trouble():
 ```python
 @retry((ValueError, TypeError), backoff=1, exponential_backoff=True)
 def make_trouble():
-	'''Retry on ValueError or TypeError, sleep 1, 2, 8, 64, ... seconds between attempts.'''
+	'''Retry on ValueError or TypeError, sleep 1, 2, 4, 8, ... seconds between attempts.'''
 ```
 
 ```python
 @retry((ValueError, TypeError), backoff=3, exponential_backoff=True, max_backoff=1000)
 def make_trouble():
-	'''Retry on ValueError or TypeError, sleep 3, 6, 24, 192, 1000, 1000 ... seconds between attempts.'''
+	'''Retry on ValueError or TypeError, sleep 3, 6, 12, 24, ..., 384, 768, 1000, 1000 ... seconds between attempts.'''
 ```
 
 ```python
