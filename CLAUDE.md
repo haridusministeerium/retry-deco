@@ -32,7 +32,7 @@ There are three entry points over two shared engines:
 Shared helpers used by both paths:
 - `validate_params` / `sanitize_on_exception` / `ensure_callable` validate arguments at construction or decoration time, raising `ValueError` or `TypeError` (never `assert`). Sync-vs-async detection always goes through `is_async_callable`, which handles partials and objects with an async `__call__`. `sanitize_on_exception` normalizes every `on_exception` form (callable, `(callable, OnErrOpts)`, dict) into a `dict[exception_type, cb | (cb, opts)]`, and requires callbacks to match the sync/async nature of the wrapped function.
 - `handle_delay` increments the attempt count, decides exhaustion (re-raise, return the exception, or return `on_exhaustion(exc)`; `on_exhaustion` is always sync), and computes the backoff (exponential, then jitter, then `max_backoff` clamp).
-- `OnErrOpts` is an `IntFlag` (`RUN_ON_LAST_TRY`, `BREAK_OUT`). On the final attempt, callbacks are skipped unless `RUN_ON_LAST_TRY` is set. `BREAK_OUT` stops iterating the remaining dict entries.
+- `OnErrOpts` is an `IntFlag` (`RUN_ON_LAST_TRY`, `BREAK_OUT`). On the final attempt, callbacks are skipped unless `RUN_ON_LAST_TRY` is set. `BREAK_OUT` stops iterating the remaining dict entries whenever its entry matches, even if that entry's callback was skipped on the last try.
 
 Semantics to keep in mind: `retries=-1` means infinite, and total attempts = `retries + 1`.
 

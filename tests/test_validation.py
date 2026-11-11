@@ -153,3 +153,44 @@ async def test_retry_async_instance__async_callable_object_is_retried():
 def test_class_with_async_call__is_not_treated_as_async():
     # calling the class itself constructs an instance synchronously
     assert isinstance(Retry()(AsyncCallable), AsyncCallable)
+
+
+@pytest.mark.parametrize("retries", [0, 1, 3])
+def test_break_out__applies_on_last_try_even_if_callback_skipped(retries):
+    calls = []
+
+    @retry(
+        retries=retries,
+        on_exception={
+            TypeError: (lambda: calls.append("type"), OnErrOpts.BREAK_OUT),
+            Exception: (lambda: calls.append("exc"), OnErrOpts.RUN_ON_LAST_TRY),
+        },
+    )
+    def f():
+        raise TypeError()
+
+    with pytest.raises(TypeError):
+        f()
+    assert calls == ["type"] * retries
+
+
+async def test_break_out__applies_on_last_try_even_if_callback_skipped__async():
+    calls = []
+
+    async def type_cb():
+        calls.append("type")
+
+    async def exc_cb():
+        calls.append("exc")
+
+    instance = RetryAsync(
+        retries=2,
+        on_exception={TypeError: (type_cb, OnErrOpts.BREAK_OUT), Exception: (exc_cb, OnErrOpts.RUN_ON_LAST_TRY)},
+    )
+
+    async def f():
+        raise TypeError()
+
+    with pytest.raises(TypeError):
+        await instance(f)
+    assert calls == ["type", "type"]

@@ -72,7 +72,9 @@ def retry(
             The options modify the callback behavior:
             - RUN_ON_LAST_TRY to invoke callback even if there are no attempts remaining
             - BREAK_OUT to stop processing remaining callbacks when dict with
-                        multiple exception types was given
+                        multiple exception types was given. Applies whenever the
+                        exception type matches, even if the callback itself is skipped
+                        on the last try for lack of RUN_ON_LAST_TRY
             Be aware if the decorated function is synchronous, on_exception function(s)
             must be synchronous as well and vice versa: for async function they need
             to be asynchronous. default: None

@@ -185,9 +185,8 @@ def retry_logic(
             for error_type in onex:
                 if isinstance(e, error_type):
                     cb, opts = unpack_callback(onex[error_type])
-                    if should_skip_cb(opts, count == retries):
-                        continue
-                    cb()
+                    if not should_skip_cb(opts, count == retries):
+                        cb()
                     if opts & OnErrOpts.BREAK_OUT:
                         break
 
@@ -230,9 +229,8 @@ async def retry_logic_async(
             for error_type in onex:
                 if isinstance(e, error_type):
                     cb, opts = unpack_callback(onex[error_type])
-                    if should_skip_cb(opts, count == retries):
-                        continue
-                    await cb()
+                    if not should_skip_cb(opts, count == retries):
+                        await cb()
                     if opts & OnErrOpts.BREAK_OUT:
                         break
 
@@ -302,7 +300,9 @@ def retry(
             The options modify the callback behavior:
             - RUN_ON_LAST_TRY to invoke callback even if there are no attempts remaining
             - BREAK_OUT to stop processing remaining callbacks when dict with
-                        multiple exception types was given
+                        multiple exception types was given. Applies whenever the
+                        exception type matches, even if the callback itself is skipped
+                        on the last try for lack of RUN_ON_LAST_TRY
             Be aware if the decorated function is synchronous, on_exception function(s)
             must be synchronous as well and vice versa: for async function they need
             to be asynchronous. default: None

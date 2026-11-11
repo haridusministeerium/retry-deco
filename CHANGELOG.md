@@ -11,6 +11,8 @@
 - fix: objects with an async `__call__` are now detected as async
 - fix: `on_exception` dict is copied, so mutating it afterwards no longer affects retry behavior
 - docs: correct exponential backoff formula and examples
+- breaking: `OnErrOpts.BREAK_OUT` now also stops the callback chain on the last attempt when
+  its own callback is skipped (no `RUN_ON_LAST_TRY`); previously broader handlers ran instead
 
 
 ## 0.0.5 (2025-11-21)
